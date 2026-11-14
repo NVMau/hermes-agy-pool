@@ -18,7 +18,7 @@ A lightweight, backend-independent routing core for Hermes Agent — inspired by
 
 ---
 
-> **Offline coordination core — not an installable Hermes provider.** Strict JSON validation, conditional plans, in-memory runtime policy, atomic SQLite reservations and a bounded metadata scheduler are implemented. Identity verification, live worker execution, live account rotation and inference are not implemented. See [scheduler contract and evidence](docs/SCHEDULER.md).
+> **Offline coordination core — not an installable Hermes provider.** Strict JSON validation, conditional plans, in-memory runtime policy, atomic SQLite reservations and a bounded metadata scheduler are implemented. Identity verification, live worker execution, live account rotation and inference are not implemented. See [scheduler contract and evidence](docs/SCHEDULER.md) and the [bounded synchronous lifecycle](docs/LIFECYCLE.md) (injected stream fixtures and direct-child cancellation evidence only).
 
 ## Why this exists
 
