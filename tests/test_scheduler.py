@@ -8,6 +8,83 @@ from agy_pool.state import LeaseStore
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_poll_error_delivers_partial_dispatch_exactly_once(self):
+        import sqlite3
+        from agy_pool.scheduler import Scheduler
+        config, clock, health = setup_runtime()
+        with tempfile.TemporaryDirectory() as directory:
+            with LeaseStore(Path(directory) / 'state.sqlite', max_workers=2,
+                            account_limits={'primary': 1, 'secondary': 1}) as store:
+                scheduler = Scheduler(store, queue_timeout_s=3, max_pending=2, clock=clock)
+                first = scheduler.submit(RequestRouter(config, 'interactive/quality', health), session='a', owner='a')
+                second = scheduler.submit(RequestRouter(config, 'background/fast', health), session='b', owner='b')
+                store._db.execute("CREATE TRIGGER reject_b BEFORE INSERT ON leases WHEN NEW.owner='b' BEGIN SELECT RAISE(ABORT, 'B failure'); END")
+                try:
+                    scheduler.poll()
+                except Exception as exc:
+                    self.assertEqual(getattr(exc, 'dispatched', None), (first,))
+                    self.assertIsInstance(exc.__cause__, sqlite3.IntegrityError)
+                else:
+                    self.fail('Expected B failure with explicit partial delivery')
+                self.assertEqual(first.request.status, Status.IN_FLIGHT)
+                self.assertIsNotNone(first.lease)
+                store._db.execute('DROP TRIGGER reject_b')
+                self.assertEqual(scheduler.poll(), (second,))
+                self.assertEqual(scheduler.poll(), ())
+                scheduler.close()
+                self.assertEqual(store._db.execute('SELECT COUNT(*) FROM leases').fetchone()[0], 2)
+
+    def test_late_cleanup_is_retained_across_locked_lifecycle_paths(self):
+        import sqlite3
+        from agy_pool.scheduler import Scheduler, PollError
+        for retry in ('poll', 'cancel', 'close', 'closed_poll', 'closed_cancel'):
+            with self.subTest(retry=retry), tempfile.TemporaryDirectory() as directory:
+                config, clock, health = setup_runtime()
+                path = Path(directory) / 'state.sqlite'
+                blocker = sqlite3.connect(path, isolation_level=None)
+                class LateStore(LeaseStore):
+                    def reserve(self, *args, **kwargs):
+                        lease = super().reserve(*args, **kwargs)
+                        clock.now += 3
+                        blocker.execute('BEGIN IMMEDIATE')
+                        return lease
+                try:
+                    with LateStore(path, max_workers=1, account_limits={'primary': 1, 'secondary': 1}) as store:
+                        scheduler = Scheduler(store, queue_timeout_s=2, max_pending=1, clock=clock)
+                        ticket = scheduler.submit(RequestRouter(config, 'interactive/quality', health), session='a', owner='p')
+                        with self.assertRaises(PollError):
+                            scheduler.poll()
+                        self.assertEqual(ticket.status, 'cleanup_pending')
+                        self.assertEqual(ticket.request.status, Status.STOPPED)
+                        self.assertEqual(scheduler.pending_count, 1)
+                        lease = ticket.lease
+                        def action():
+                            if retry == 'cancel' or retry == 'closed_cancel':
+                                return scheduler.cancel(ticket)
+                            if retry == 'close':
+                                return scheduler.close()
+                            return scheduler.poll()
+                        if retry.startswith('closed_'):
+                            with self.assertRaises(sqlite3.OperationalError):
+                                scheduler.close()
+                            with self.assertRaises(RuntimeError):
+                                scheduler.submit(RequestRouter(config, 'interactive/quality', health), session='b', owner='p')
+                        with self.assertRaises((PollError, sqlite3.OperationalError)):
+                            action()
+                        self.assertEqual(scheduler.pending_count, 1)
+                        self.assertIs(ticket.lease, lease)
+                        self.assertEqual(store._db.execute('SELECT COUNT(*) FROM leases').fetchone()[0], 1)
+                        blocker.execute('ROLLBACK')
+                        action()
+                        self.assertEqual(scheduler.pending_count, 0)
+                        self.assertIsNone(ticket.lease)
+                        self.assertEqual(ticket.status, 'expired')
+                        self.assertEqual(ticket.request.visited, frozenset())
+                        self.assertEqual(store._db.execute('SELECT COUNT(*) FROM leases').fetchone()[0], 0)
+                        scheduler.close()
+                finally:
+                    blocker.close()
+
     def test_invalid_clock_rejects_submission_without_queueing(self):
         from agy_pool.scheduler import Scheduler
         config, clock, health = setup_runtime()

@@ -22,6 +22,67 @@ def setup_runtime(data=None, *, aliases=None, identities=None, support=None):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_direct_late_bridge_retains_rollback_until_sqlite_unlock(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        from agy_pool.state import LeaseStore
+        from agy_pool.runtime import RequestRouter, Status
+        config, clock, health = setup_runtime()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'state.sqlite'
+            with LeaseStore(path, max_workers=1, account_limits={'primary': 1, 'secondary': 1}) as store:
+                blocker = sqlite3.connect(path, isolation_level=None)
+                request = RequestRouter(config, 'interactive/quality', health, deadline=101)
+                leases = []
+                def reserve(model, canonical, accounts):
+                    leases.append(store.reserve(accounts, group=request.group, model=canonical, session='s', owner='p'))
+                    clock.now = 101
+                    blocker.execute('BEGIN IMMEDIATE')
+                    return leases[-1].account
+                def rollback(account):
+                    self.assertEqual(account, leases[-1].account)
+                    store.release(leases[-1].token, owner=leases[-1].owner)
+                try:
+                    with self.assertRaises(sqlite3.OperationalError):
+                        request.next_attempt(reserve=reserve, rollback=rollback)
+                    self.assertEqual(request.status, Status.STOPPED)
+                    self.assertEqual(request.stop_reason, 'deadline')
+                    self.assertEqual(request.visited, frozenset())
+                    self.assertTrue(request.cleanup_pending)
+                    with self.assertRaises(sqlite3.OperationalError):
+                        request.retry_cleanup()
+                    self.assertTrue(request.cleanup_pending)
+                    self.assertEqual(store._db.execute('SELECT COUNT(*) FROM leases').fetchone()[0], 1)
+                    blocker.execute('ROLLBACK')
+                    request.retry_cleanup()
+                    self.assertFalse(request.cleanup_pending)
+                    request.retry_cleanup()
+                    self.assertEqual(store._db.execute('SELECT COUNT(*) FROM leases').fetchone()[0], 0)
+                    self.assertIsNone(request.next_attempt())
+                finally:
+                    blocker.close()
+
+    def test_ineligible_reservation_is_rolled_back(self):
+        from agy_pool.runtime import RequestRouter
+        config, clock, health = setup_runtime()
+        request = RequestRouter(config, 'interactive/quality', health)
+        released = []
+        with self.assertRaises(ValueError):
+            request.next_attempt(reserve=lambda *args: 'outside', rollback=released.append)
+        self.assertEqual(released, ['outside'])
+        self.assertEqual(request.visited, frozenset())
+
+    def test_bridge_requires_rollback_before_invoking_reservation(self):
+        from agy_pool.runtime import RequestRouter
+        config, clock, health = setup_runtime()
+        request = RequestRouter(config, 'interactive/quality', health)
+        calls = []
+        with self.assertRaises(ValueError):
+            request.next_attempt(reserve=lambda *args: calls.append(args))
+        self.assertEqual(calls, [])
+        self.assertEqual(request.visited, frozenset())
+
     def test_reservation_bridge_does_not_spend_attempts_on_capacity(self):
         from agy_pool.runtime import RequestRouter, Status
         config, clock, health = setup_runtime()
@@ -30,19 +91,19 @@ class RuntimeTests(unittest.TestCase):
         def full(model, canonical, accounts):
             calls.append((model, canonical, accounts))
             return None
-        self.assertIsNone(request.next_attempt(reserve=full))
+        self.assertIsNone(request.next_attempt(reserve=full, rollback=lambda account: None))
         self.assertEqual(request.status, Status.READY)
         self.assertEqual(request.visited, frozenset())
         self.assertEqual(calls[0][2], ('primary', 'secondary'))
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][0], 'claude-sonnet-4-6')
-        first = request.next_attempt(reserve=lambda m, c, accounts: accounts[-1])
+        first = request.next_attempt(reserve=lambda m, c, accounts: accounts[-1], rollback=lambda account: None)
         self.assertEqual((first.account, first.number), ('secondary', 1))
         request.fail(first, Failure(Kind.UNSUPPORTED_MODEL))
-        self.assertEqual(request.next_attempt(reserve=lambda m, c, accounts: accounts[0]).account, 'primary')
+        self.assertEqual(request.next_attempt(reserve=lambda m, c, accounts: accounts[0], rollback=lambda account: None).account, 'primary')
         other = RequestRouter(config, 'background/fast', health)
         with self.assertRaises(ValueError):
-            other.next_attempt(reserve=lambda m, c, accounts: 'outside')
+            other.next_attempt(reserve=lambda m, c, accounts: 'outside', rollback=lambda account: None)
         self.assertEqual(other.visited, frozenset())
 
     def test_routing_boundaries_and_catalog_filtering(self):

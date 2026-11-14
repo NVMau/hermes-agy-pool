@@ -47,6 +47,7 @@ class RequestRouter:
         self._last_failure = None
         self._stop_reason = None
         self._visible = False
+        self._cleanup = None
 
     @property
     def status(self):
@@ -76,12 +77,27 @@ class RequestRouter:
         if self.status == Status.READY:
             self._stop(reason)
 
-    def next_attempt(self, *, reserve=None) -> Attempt | None:
-        """Reserve callback(model, canonical, eligible_accounts) selects an account.
+    @property
+    def cleanup_pending(self):
+        return self._cleanup is not None
 
-        None means capacity blocked, not a routing failure or spent attempt.
-        Callback must be synchronous and must not modify health/router state.
+    def retry_cleanup(self):
+        if self._cleanup is not None:
+            rollback, account = self._cleanup
+            rollback(account)
+            self._cleanup = None
+
+    def next_attempt(self, *, reserve=None, rollback=None) -> Attempt | None:
+        """Synchronous reserve(model, canonical, accounts) requires rollback(account).
+
+        None means blocked; a returned account transfers unlaunched ownership.
+        Rollback must retain the exact token and be retry-safe. A callback that
+        raises or returns None must leave no new lease behind. Neither callback
+        may launch workers or modify router/health state. Late results stop the
+        router before rollback; failed rollback remains in cleanup_pending.
         """
+        if reserve is not None and (not callable(reserve) or not callable(rollback)):
+            raise ValueError('Reservation requires a callable rollback')
         if self.status == Status.IN_FLIGHT:
             raise RuntimeError('Complete the active attempt first')
         if self.status != Status.READY:
@@ -102,9 +118,18 @@ class RequestRouter:
                     and self._health.available(account, model)))
             if accounts:
                 account = accounts[0] if reserve is None else reserve(model, canonical, accounts)
+                if self._health.now() >= self._deadline:
+                    self._stop('deadline')
+                    if account is not None and rollback is not None:
+                        self._cleanup = (rollback, account)
+                        self.retry_cleanup()
+                    return None
                 if account is None:
                     return None
                 if account not in accounts:
+                    self._stop('invalid_reservation')
+                    self._cleanup = (rollback, account)
+                    self.retry_cleanup()
                     raise ValueError('Reservation selected an ineligible account')
                 self._visited.add((account, canonical))
                 self._active = Attempt(account, model, canonical, len(self._visited))

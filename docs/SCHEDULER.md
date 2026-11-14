@@ -20,15 +20,19 @@ Only the supplied eligible account tuple is considered. Sticky bindings are keye
 
 ## Runtime bridge and queue
 
-`RequestRouter.next_attempt(reserve=callback)` calls `callback(requested_model, canonical_model, eligible_accounts)` only after checking model/group membership, enabled state, verified catalog, required capabilities, health, visited pairs and request budget/deadline. Callback returns one supplied account or None. An outside account raises ValueError without consuming an attempt. None leaves READY and does not spend an attempt, exhaust a model or grant fallback. Existing direct `next_attempt()` callers retain configured-order behavior; use the reservation bridge for hard-cap scheduling.
+`RequestRouter.next_attempt(reserve=callback, rollback=rollback)` calls `callback(requested_model, canonical_model, eligible_accounts)` only after checking model/group membership, enabled state, verified catalog, required capabilities, health, visited pairs and request budget/deadline. Supplying reserve now requires a callable rollback, validated before invoking reserve (intentional bridge API change). Callback returns one supplied account or None. The deadline is checked again after callback return, including None: a late result stops routing with reason `deadline`, consumes no attempt and never enters IN_FLIGHT. A returned reservation is rolled back before returning None. An outside account stops routing as `invalid_reservation`, rolls back and raises ValueError. An on-time None leaves READY without spending an attempt or granting fallback. Existing direct `next_attempt()` callers retain configured-order behavior.
+
+Both callbacks are synchronous, non-reentrant and must not launch workers or mutate router/health state. Reserve must retain the exact lease token/owner in rollback's closure; raising or returning None must leave no newly owned reservation behind. `rollback(account)` releases only that unlaunched reservation, is retry-safe and returns normally only once release/absence is confirmed; any uncertainty must raise. The router retains the rollback closure and account on cleanup failure (`cleanup_pending` is True); the host must retain the router/store and call `retry_cleanup()` on a bounded cadence until it succeeds. Repeated successful cleanup is a no-op. A stopped router does not implicitly retry cleanup through next_attempt. Callback correctness is a caller contract, not an authorization sandbox.
 
 `Scheduler(store, queue_timeout_s=..., max_pending=..., clock=...)` is **single-owner, non-thread-safe**, with a bounded in-memory queue per instance, not a shared database queue. `max_pending` is an explicit host limit (positive integer below `2**63`), not a new config schema field. Supply the same monotonic clock/domain as `Health`/`RequestRouter`; backward/invalid clocks are not a supported scheduling environment. Times/durations must be finite and nonnegative; timeout must be positive.
 
 - `submit(request, session=..., owner=...)` accepts an unqueued READY request; records `min(request.deadline, now + queue_timeout_s)`. The queue raises OverflowError at `max_pending`; it does not retain overflowed requests. Invalid identifiers/limits are rejected. Do not submit a request to multiple scheduler instances.
 - `poll()` makes one finite submission-order pass, checks each current deadline and attempts at most one atomic reservation per eligible request. Blocked tickets stay queued; later tickets can use other free capacity. No sleeps, fake-clock spin loops, timer threads or indefinite waits are hidden here. The host must invoke poll again on its own bounded cadence/capacity notification, and must poll to observe expiry. Filesystem/SQLite latency is not a real-time execution guarantee.
-- Late metadata reservations are explicitly released before committing a routing attempt because no backend has launched. Do not launch inside a store override or callback. Return tickets with status `reserved`, their runtime `attempt` and `lease`. Caller owns the routing result and lease thereafter, including visible-output marking, fail/succeed, worker termination and release. Treat ticket fields as read-only; retain every returned ticket, including tickets dispatched before a later polling error.
-- `cancel(ticket)` cancels only queued tickets, is idempotent and stops READY routing. It returns False for already-dispatched tickets, since cancellation alone is not proof a live worker has stopped. External router cancellation is observed on the next poll.
-- `close()`/context exit cancels queued tickets, never closes the caller's store or releases dispatched live/idle/unknown reservations. Repeated close is safe; submit/poll after close raises RuntimeError.
+- Successful `poll()` returns reserved tickets with their runtime attempt and lease. If any ticket operation raises an Exception, `PollError.dispatched` explicitly delivers the successful prefix (possibly empty); `__cause__` preserves the original error. Consume that tuple exactly as a normal return **before retrying**. Each ticket is delivered once across normal returns and PollError tuples; retries never replay the prefix. This is an exception-partial-result API, not an acknowledgement protocol or crash-durable outbox. Caller owns all delivered leases and worker lifecycle; cancel/close never auto-release them.
+- Late unlaunched metadata reservations enter `cleanup_pending` before release. The request stops without spending an attempt. A failed release retains the exact lease and ticket in the bounded pending queue; it cannot be overwritten by another reserve. Poll, cancel and close retry cleanup. Only confirmed release (including idempotent absence for the original token/owner) clears the lease and removes the ticket. The original terminal status (for example expired) survives retries/cancellation.
+- `cancel(ticket)` cancels queued tickets or retries pending cleanup, and returns False once a ticket is removed, including delivered tickets. External router cancellation is observed on the next poll.
+- `close()` immediately rejects submissions, attempts cancellation/cleanup of every pending ticket even if another fails, then propagates a cleanup error if any remain. It never closes the caller's store. Repeated close retries retained cleanup; cancel remains usable during shutdown. Poll after close is permitted only while pending work remains, performs cancellation/cleanup only, and never dispatches. Once drained, poll raises RuntimeError as before. Keep the scheduler and store alive until pending_count reaches zero; context exit can raise and is not guaranteed cleanup under a persistent lock.
+- Guarantees are in-process and cooperative: no crash recovery, BaseException interruption recovery, worker execution, or automatic retries are introduced. Never launch inside reserve/rollback/store overrides; treat ticket fields as read-only.
 
 ### Construction example (requires a verified catalog supplied separately)
 
@@ -56,7 +60,21 @@ with LeaseStore("pool-state.sqlite", max_workers=config.limits.max_workers,
 
 Do not run this example with an invented verified catalog and call it live evidence. Direct dataclass construction remains outside config validation. Health/capability state stays in memory and is not cross-process synchronized by this store.
 
-## Executed local evidence
+## Blocking-review correction evidence
+
+Starting head `66a30f36117cd871fb120ae4476b8a684c88acb0`; local-only corrections on `feat/atomic-scheduler`:
+
+| Vertical slice | Observed RED | GREEN |
+| --- | --- | --- |
+| Explicit partial dispatch delivery | real SQLite B-abort trigger lost successful A (`dispatched` absent) | A delivered on PollError, B only on retry, neither replayed; both leases survive close |
+| Retained late cleanup | queued instead of cleanup_pending in five real SQLite lock paths | poll, cancel, close, closed-poll and closed-cancel retain token while locked, release after unlock |
+| Direct bridge late rollback | rollback keyword unsupported | real SQLite lock raises during rollback; STOPPED with no visited pairs, retained cleanup, explicit retry frees lease |
+| Mandatory rollback contract | reserve invoked without rollback | rejected before callback invocation; existing metadata-only callbacks updated |
+| Invalid reservation ownership | outside account was not rolled back | rollback before ValueError, no spent attempt |
+
+Full unittest suite after corrections: **33 test methods passed** on this Windows host. Every slice ran RED then GREEN before the next production change. Tests exercise real SQLite transactions/locks and metadata only; no remote CI, other OS, live workers, push or merge is claimed.
+
+## Original milestone evidence
 
 Base was clean `main` at `b51fbeaed118aad89a58d8e2c13900f44848cb14`; branch `feat/atomic-scheduler`. Local Python 3.14.9 on Windows, stdlib only:
 
