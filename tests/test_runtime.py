@@ -22,6 +22,29 @@ def setup_runtime(data=None, *, aliases=None, identities=None, support=None):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_reservation_bridge_does_not_spend_attempts_on_capacity(self):
+        from agy_pool.runtime import RequestRouter, Status
+        config, clock, health = setup_runtime()
+        request = RequestRouter(config, 'interactive/quality', health)
+        calls = []
+        def full(model, canonical, accounts):
+            calls.append((model, canonical, accounts))
+            return None
+        self.assertIsNone(request.next_attempt(reserve=full))
+        self.assertEqual(request.status, Status.READY)
+        self.assertEqual(request.visited, frozenset())
+        self.assertEqual(calls[0][2], ('primary', 'secondary'))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], 'claude-sonnet-4-6')
+        first = request.next_attempt(reserve=lambda m, c, accounts: accounts[-1])
+        self.assertEqual((first.account, first.number), ('secondary', 1))
+        request.fail(first, Failure(Kind.UNSUPPORTED_MODEL))
+        self.assertEqual(request.next_attempt(reserve=lambda m, c, accounts: accounts[0]).account, 'primary')
+        other = RequestRouter(config, 'background/fast', health)
+        with self.assertRaises(ValueError):
+            other.next_attempt(reserve=lambda m, c, accounts: 'outside')
+        self.assertEqual(other.visited, frozenset())
+
     def test_routing_boundaries_and_catalog_filtering(self):
         from agy_pool.runtime import RequestRouter
         # Group boundary: background/fast route cannot touch primary account

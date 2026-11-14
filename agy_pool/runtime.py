@@ -64,7 +64,24 @@ class RequestRouter:
         self._status = Status.STOPPED
         self._stop_reason = reason
 
-    def next_attempt(self) -> Attempt | None:
+    @property
+    def deadline(self):
+        return self._deadline
+
+    @property
+    def group(self):
+        return self._route.group
+
+    def cancel(self, reason='cancelled'):
+        if self.status == Status.READY:
+            self._stop(reason)
+
+    def next_attempt(self, *, reserve=None) -> Attempt | None:
+        """Reserve callback(model, canonical, eligible_accounts) selects an account.
+
+        None means capacity blocked, not a routing failure or spent attempt.
+        Callback must be synchronous and must not modify health/router state.
+        """
         if self.status == Status.IN_FLIGHT:
             raise RuntimeError('Complete the active attempt first')
         if self.status != Status.READY:
@@ -78,15 +95,21 @@ class RequestRouter:
         while self._stage < len(self._route.models):
             model = self._route.models[self._stage]
             canonical = self._health.catalog.canonical(model)
-            for account in self._config.groups[self._route.group].accounts:
-                pair = (account, canonical)
-                if (pair not in self._visited and self._config.accounts[account].enabled
-                        and self._health.catalog.eligible(account, model, self._route.required_capabilities)
-                        and self._health.available(account, model)):
-                    self._visited.add(pair)
-                    self._active = Attempt(account, model, canonical, len(self._visited))
-                    self._status = Status.IN_FLIGHT
-                    return self._active
+            accounts = tuple(
+                account for account in self._config.groups[self._route.group].accounts
+                if ((account, canonical) not in self._visited and self._config.accounts[account].enabled
+                    and self._health.catalog.eligible(account, model, self._route.required_capabilities)
+                    and self._health.available(account, model)))
+            if accounts:
+                account = accounts[0] if reserve is None else reserve(model, canonical, accounts)
+                if account is None:
+                    return None
+                if account not in accounts:
+                    raise ValueError('Reservation selected an ineligible account')
+                self._visited.add((account, canonical))
+                self._active = Attempt(account, model, canonical, len(self._visited))
+                self._status = Status.IN_FLIGHT
+                return self._active
             if (self._last_failure is None
                     or self._last_failure.kind.value not in self._route.fallback_on):
                 break

@@ -1,6 +1,6 @@
 # Architecture
 
-Status: strict configuration and offline conditional planning implemented; the remaining architecture is proposed. No inference implementation is shipped. See [implemented contract](CONFIG.md).
+Status: strict configuration, offline conditional planning, in-memory runtime policy and atomic metadata scheduling implemented; backend, live worker and provider architecture remains proposed. See [scheduler contract](SCHEDULER.md). No inference implementation is shipped. See [implemented contract](CONFIG.md).
 
 ## Design constraints
 
