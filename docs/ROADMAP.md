@@ -17,10 +17,10 @@ All unchecked items are planned. No runtime capability is implied by this roadma
 ## M1 — Pure routing engine
 - [x] Strict configuration validation and immutable parsed models
 - [x] Deterministic conditional plan CLI (offline simulation only)
-- [ ] Group membership and canonical model capability rules
-- [ ] Typed errors, reset hints and model-scoped cooldown
-- [ ] Same-model account failover and opt-in model fallback
-- [ ] Global attempt budget, visited pairs and deadlines
+- [x] Group membership and canonical model capability rules
+- [x] Typed errors, reset hints and model-scoped cooldown
+- [x] Same-model account failover and opt-in model fallback
+- [x] Global attempt budget, visited pairs and deadlines
 
 ## M2 — Scheduler
 - [ ] SQLite atomic leases across processes
