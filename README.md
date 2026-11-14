@@ -83,6 +83,16 @@ The first choice stays the first choice. The router tries another eligible accou
 - No unlimited subprocess spawning on contention.
 - No claim of production readiness before real identity and lifecycle tests pass.
 
+## Implemented runtime policy
+
+A deterministic, in-memory state machine executes the routing policy without live inference or network dependencies:
+
+- **Typed failures & conservative cooldowns**: `Failure(kind, scope, retry_after_s)` distinguishes `account` from `model` scope. Unknown scopes fail safe and quarantine the whole account. Authentication failures trigger quarantine until explicit administrative reset. Retry hints from upstream are honored.
+- **Verified capability snapshot**: `Catalog` and `ModelSupport` map attested identity verification and capabilities (`tools`, `vision`, `schema`) to canonical models, resolving aliases cleanly without speculative inference.
+- **Same-model failover & explicit fallback**: `RequestRouter` tries unvisited verified eligible accounts for the primary model before testing configured `fallback_on` conditions to advance to subsequent models. Group boundaries are strictly preserved.
+- **Stream protection**: `visible(attempt, fragment)` marks output emission (text, reasoning, tool calls). Any subsequent failure terminates immediately with `stop_reason='visible_output'`; partial completions are never replayed.
+- **Bounded attempts & deadlines**: Bounded by `limits.max_attempts` and absolute request deadlines; terminal failures (`unknown`, `invalid_request`, `context`) halt without rotation.
+
 ## Development status
 
 The current deliverable is a standard-library-only Python core (Python 3.11+). Run from the repository root; no package installation or Hermes configuration changes are needed.

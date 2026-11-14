@@ -29,6 +29,31 @@ Parsed models are frozen dataclasses with tuple sequences and read-only mapping 
 
 CLI success is exit 0. Configuration, file, route and usage errors return exit 2, without raw configuration contents or tracebacks. `plan` requires `--dry-run`. No command sends inference, reads credentials or launches AGY.
 
+## In-memory runtime policy semantics
+
+The in-memory policy modules separate transport execution from routing decisions:
+
+1. **Structured Errors (`agy_pool.errors`)**:
+   - `Kind`: `UNKNOWN`, `INVALID_REQUEST`, `CONTEXT`, `AUTH`, `UNSUPPORTED_MODEL`, `QUOTA`, `CAPACITY`.
+   - `Scope`: `UNKNOWN`, `ACCOUNT`, `MODEL` (account + canonical model).
+   - `Failure(kind, scope, retry_after_s)` enforces finite nonnegative durations. Non-retryable kinds (`UNKNOWN`, `INVALID_REQUEST`, `CONTEXT`) fail closed.
+
+2. **Capability Catalog (`agy_pool.capabilities`)**:
+   - `Catalog(aliases, verified_accounts, support)`: frozen snapshot with read-only mappings. Aliases map to canonical models and cannot chain or self-reference.
+   - Unknown capabilities or unverified accounts/models are strictly ineligible for routing.
+
+3. **Health & Cooldown (`agy_pool.health`)**:
+   - In-memory `Health(catalog, clock, cooldown_s)` supports pluggable deterministic fake clocks.
+   - Conservative failure scoping: if an error scope is `UNKNOWN`, the cooldown applies across the entire account. Model-scoped errors only cool down that account + canonical model pair.
+   - Authentication failures (`Kind.AUTH`) place the account in quarantine until administrative `reset_auth(account)`.
+   - Upstream retry hints (`retry_after_s`) override default cooldowns.
+
+4. **Request State Machine (`agy_pool.runtime`)**:
+   - `RequestRouter(config, route_id, health, deadline=None)` coordinates single-request lifecycle (`READY`, `IN_FLIGHT`, `SUCCEEDED`, `STOPPED`).
+   - Prioritizes accounts within the route's configured group on the primary model before testing explicit `fallback_on` conditions.
+   - Tracks visited `(account, canonical_model)` pairs and halts when `limits.max_attempts` or request deadline is met.
+   - Never re-attempts or falls back if visible stream fragments (`Fragment.TEXT`, `Fragment.REASONING`, `Fragment.TOOL`) were emitted (`stop_reason='visible_output'`).
+
 ## Local TDD evidence
 
 Executed with Windows Python 3.14.9 using `python -m unittest discover -s tests -v`:
