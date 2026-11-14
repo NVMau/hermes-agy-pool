@@ -15,7 +15,8 @@ All unchecked items are planned. No runtime capability is implied by this roadma
 - [ ] Choose official isolated backend or explicitly narrow scope
 
 ## M1 — Pure routing engine
-- [ ] Strict configuration validation
+- [x] Strict configuration validation and immutable parsed models
+- [x] Deterministic conditional plan CLI (offline simulation only)
 - [ ] Group membership and canonical model capability rules
 - [ ] Typed errors, reset hints and model-scoped cooldown
 - [ ] Same-model account failover and opt-in model fallback

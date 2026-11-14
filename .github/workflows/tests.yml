@@ -1,0 +1,24 @@
+name: Runtime tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  unittest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.14']
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Verified against upstream v4.2.2 and v6 tags with git ls-remote.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m unittest discover -s tests -v
+      - run: python -m agy_pool validate examples/pools.json
+      - run: python -m agy_pool plan examples/pools.json interactive/quality --dry-run
+      - run: git diff --check

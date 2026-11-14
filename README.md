@@ -6,11 +6,11 @@
 
 **One routing layer. Explicit pools. Predictable fallback.**
 
-[![Status: Design](https://img.shields.io/badge/status-design%20%26%20foundation-f5a623)](docs/ROADMAP.md)
+[![Status: Pure core](https://img.shields.io/badge/status-offline%20pure%20core-f5a623)](docs/ROADMAP.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-5eead4)](LICENSE)
 [![Documentation](https://github.com/NVMau/hermes-agy-pool/actions/workflows/docs.yml/badge.svg)](https://github.com/NVMau/hermes-agy-pool/actions/workflows/docs.yml)
 
-A lightweight, backend-independent routing design for Hermes Agent — inspired by CLIProxyAPI, starting with an official AGY transport adapter.
+A lightweight, backend-independent routing core for Hermes Agent — inspired by CLIProxyAPI. An official AGY transport adapter remains planned.
 
 [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Research](docs/RESEARCH.md) · [Contributing](CONTRIBUTING.md)
 
@@ -18,7 +18,7 @@ A lightweight, backend-independent routing design for Hermes Agent — inspired 
 
 ---
 
-> **Design-stage project — not an installable provider yet.** This repository contains the architecture, policy example, engineering contracts and implementation roadmap. Account rotation, inference and model fallback are planned, not shipped.
+> **Offline pure core — not an installable Hermes provider.** Strict JSON validation and deterministic conditional routing plans are implemented. Scheduling, identity verification, live account rotation, inference and executed model fallback are not implemented.
 
 ## Why this exists
 
@@ -59,7 +59,7 @@ See [the identity boundary ADR](docs/adr/0001-identity-boundary.md).
 
 ## Policy preview
 
-This is a **proposed schema**, not an executable configuration today:
+This route fragment illustrates the validated schema; use the full example for CLI input:
 
 ```json
 {
@@ -85,7 +85,19 @@ The first choice stays the first choice. The router tries another eligible accou
 
 ## Development status
 
-The current deliverable is an implementation-ready project structure and a gated roadmap. There is deliberately no fake provider entrypoint or install command.
+The current deliverable is a standard-library-only Python core (Python 3.11+). Run from the repository root; no package installation or Hermes configuration changes are needed.
+
+```sh
+python -m unittest discover -s tests -v
+python -m agy_pool validate examples/pools.json
+python -m agy_pool plan examples/pools.json interactive/quality --dry-run
+```
+
+`validate` checks syntax, schema and references, not credentials or entitlement. `plan` requires `--dry-run` and emits JSON labeled `simulation`. See [the implemented contract](docs/CONFIG.md).
+
+The plan lists enabled account aliases in group order for each model, with explicit failure gates for later models. It is a conditional policy tree, **not an executable attempt list**: capabilities and identities remain unverified, limits are not enforced, and sticky/round-robin selection is not implemented. There is no fake backend.
+
+Remaining integration gates:
 
 1. Prove an account identity boundary for the selected backend.
 2. Implement pure policy and scheduling behavior using TDD.
@@ -93,7 +105,7 @@ The current deliverable is an implementation-ready project structure and a gated
 4. Validate Hermes sync, async and auxiliary paths.
 5. Run approved live tests before publishing an installable release.
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR. Documentation CI validates the JSON example and required repository files; it does **not** test an inference implementation.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR. Runtime CI is configured for Windows/Linux and Python 3.11/3.14, running unit tests and CLI smoke commands. Documentation CI checks repository files. Neither proves live inference or identity isolation.
 
 ## Inspiration and attribution
 

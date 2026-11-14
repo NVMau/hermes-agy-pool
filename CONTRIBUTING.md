@@ -1,6 +1,6 @@
 # Contributing
 
-This is a design-stage project. Start with a focused issue or small PR aligned with the [roadmap](docs/ROADMAP.md).
+This is an offline pure-core project, not a live provider. Start with a focused issue or small PR aligned with the [roadmap](docs/ROADMAP.md).
 
 ## Engineering rules
 
@@ -12,11 +12,13 @@ This is a design-stage project. Start with a focused issue or small PR aligned w
 6. Preserve licenses when adapting upstream code; record the exact source revision.
 7. State whether evidence is a unit fixture, subprocess simulation or real upstream request.
 
-There is no installable package or runtime test suite yet. Current local documentation checks:
+Use Python 3.11+ from the repository root; no third-party dependencies. Local checks:
 
 ```sh
-python -m json.tool examples/pools.json
- git diff --check
+python -m unittest discover -s tests -v
+python -m agy_pool validate examples/pools.json
+python -m agy_pool plan examples/pools.json interactive/quality --dry-run
+git diff --check
 ```
 
 Future code PRs must add their exact test/setup commands rather than relying on hypothetical commands from the design docs. Keep PRs narrow and describe failure cases, cancellation behavior and security impact.
