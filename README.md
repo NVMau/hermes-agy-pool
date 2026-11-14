@@ -18,7 +18,7 @@ A lightweight, backend-independent routing core for Hermes Agent — inspired by
 
 ---
 
-> **Offline pure core — not an installable Hermes provider.** Strict JSON validation and deterministic conditional routing plans are implemented. Scheduling, identity verification, live account rotation, inference and executed model fallback are not implemented.
+> **Offline coordination core — not an installable Hermes provider.** Strict JSON validation, conditional plans, in-memory runtime policy, atomic SQLite reservations and a bounded metadata scheduler are implemented. Identity verification, live worker execution, live account rotation and inference are not implemented. See [scheduler contract and evidence](docs/SCHEDULER.md).
 
 ## Why this exists
 
@@ -93,6 +93,15 @@ A deterministic, in-memory state machine executes the routing policy without liv
 - **Stream protection**: `visible(attempt, fragment)` marks output emission (text, reasoning, tool calls). Any subsequent failure terminates immediately with `stop_reason='visible_output'`; partial completions are never replayed.
 - **Bounded attempts & deadlines**: Bounded by `limits.max_attempts` and absolute request deadlines; terminal failures (`unknown`, `invalid_request`, `context`) halt without rotation.
 
+## Implemented reservation scheduler
+
+- Atomic account/global reservation caps across groups and cooperating processes on one SQLite file, including idle reservations.
+- Opaque owner-scoped idempotent release; unknown/stale owners remain reserved, never heartbeat-reclaimed.
+- Persistent eligible-account sticky affinity and round-robin; a runtime reservation bridge does not spend routing attempts for full capacity.
+- A caller-driven, bounded in-memory queue with deadlines, cancellation and context-managed cleanup. Real multiprocessing tests verify metadata contention, not a live AGY process pool.
+
+[Full API, lifecycle limits and TDD evidence](docs/SCHEDULER.md). No live transport/auth implementation is included.
+
 ## Development status
 
 The current deliverable is a standard-library-only Python core (Python 3.11+). Run from the repository root; no package installation or Hermes configuration changes are needed.
@@ -105,12 +114,12 @@ python -m agy_pool plan examples/pools.json interactive/quality --dry-run
 
 `validate` checks syntax, schema and references, not credentials or entitlement. `plan` requires `--dry-run` and emits JSON labeled `simulation`. See [the implemented contract](docs/CONFIG.md).
 
-The plan lists enabled account aliases in group order for each model, with explicit failure gates for later models. It is a conditional policy tree, **not an executable attempt list**: capabilities and identities remain unverified, limits are not enforced, and sticky/round-robin selection is not implemented. There is no fake backend.
+The plan lists enabled account aliases in group order for each model, with explicit failure gates for later models. It is a conditional policy tree, **not an executable attempt list**: the planner itself does not verify capabilities/identities, enforce limits or execute sticky/round-robin selection. The separate runtime reservation scheduler does enforce its metadata limits. There is no fake backend.
 
 Remaining integration gates:
 
 1. Prove an account identity boundary for the selected backend.
-2. Implement pure policy and scheduling behavior using TDD.
+2. Extend metadata policy/scheduling into a verified worker lifecycle without weakening reservation caps.
 3. Integrate bounded workers and streaming lifecycle.
 4. Validate Hermes sync, async and auxiliary paths.
 5. Run approved live tests before publishing an installable release.

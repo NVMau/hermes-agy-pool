@@ -23,11 +23,14 @@ All unchecked items are planned. No runtime capability is implied by this roadma
 - [x] Global attempt budget, visited pairs and deadlines
 
 ## M2 — Scheduler
-- [ ] SQLite atomic leases across processes
-- [ ] Shared-account hard capacity across groups
-- [ ] Global worker cap includes idle processes
-- [ ] Queue timeout and session affinity
-- [ ] Safe stale-owner recovery and idempotent release
+- [x] SQLite atomic metadata reservations across cooperating processes
+- [x] Shared-account hard reservation capacity across groups
+- [x] Global reservation cap includes idle metadata (not measured live processes)
+- [x] Bounded queue timeout/cancellation and eligible-account session affinity
+- [x] Owner-scoped idempotent release; unknown/stale owners fail closed without heartbeat reclamation
+- [ ] Verified live/idle worker lifecycle, termination proof and safe administrative stale-owner recovery
+
+See [implemented scheduler scope and evidence](SCHEDULER.md); metadata multiprocessing tests do not satisfy live worker release gates.
 
 ## M3 — Backend and stream
 - [ ] Explicit immutable account launch context

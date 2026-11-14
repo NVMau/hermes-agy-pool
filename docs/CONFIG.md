@@ -15,7 +15,7 @@ The complete schema is illustrated by `examples/pools.json`. Every shown field i
 - Fallback vocabulary: `unsupported_model`, `quota`, `capacity`. Unknown failures, authentication errors, invalid requests, context overflow and post-output failures cannot grant fallback permission.
 - Capability vocabulary: `tools`, `vision`, `schema`. These are requirements, never inferred support.
 
-Parsed models are frozen dataclasses with tuple sequences and read-only mapping wrappers. Account aliases may appear in multiple groups; future scheduling must share their limits.
+Parsed models are frozen dataclasses with tuple sequences and read-only mapping wrappers. Account aliases may appear in multiple groups; the SQLite reservation scheduler shares their limits on one store file.
 
 ## Conditional planning semantics
 
@@ -25,7 +25,7 @@ Parsed models are frozen dataclasses with tuple sequences and read-only mapping 
 2. A stage contains one model and all candidate accounts for that model. Exhaust eligible accounts in that stage before considering the next stage.
 3. Later stages exist only when `fallback_on` is nonempty. Each is gated by `requires_failure`: an explicitly allowed pre-output failure from the preceding stage after same-model candidates are exhausted. A successful attempt stops; this is not a list to execute unconditionally.
 4. `required_capabilities` applies to **every** account/model pair in **every** stage. Unknown support is not eligible for live execution. Identity verification, capability verification, health/cooldown/capacity and pre-output safety appear as unresolved prerequisites. The planner has no discovery backend and therefore does not claim any candidate is runnable.
-5. `max_attempts` is reported, not consumed or enforced. Stages are alternatives, so their total pair count may exceed this budget. Deadlines, leases, affinity, round-robin cursors and failure classification remain unimplemented.
+5. `max_attempts` is reported, not consumed or enforced. Stages are alternatives, so their total pair count may exceed this budget. These are planner-only semantics; deadline, reservation, affinity and failure handling are implemented in the separate runtime/scheduler APIs, not executed by the CLI planner.
 
 CLI success is exit 0. Configuration, file, route and usage errors return exit 2, without raw configuration contents or tracebacks. `plan` requires `--dry-run`. No command sends inference, reads credentials or launches AGY.
 
@@ -53,6 +53,10 @@ The in-memory policy modules separate transport execution from routing decisions
    - Prioritizes accounts within the route's configured group on the primary model before testing explicit `fallback_on` conditions.
    - Tracks visited `(account, canonical_model)` pairs and halts when `limits.max_attempts` or request deadline is met.
    - Never re-attempts or falls back if visible stream fragments (`Fragment.TEXT`, `Fragment.REASONING`, `Fragment.TOOL`) were emitted (`stop_reason='visible_output'`).
+
+## Atomic metadata scheduler
+
+See [SCHEDULER.md](SCHEDULER.md) for the SQLite store, explicit runtime reservation bridge, bounded single-owner queue, numerical validation, close/release ownership contract and local RED/GREEN evidence. This API does not launch workers or verify credentials.
 
 ## Local TDD evidence
 
