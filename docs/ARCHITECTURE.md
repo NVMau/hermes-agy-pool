@@ -1,6 +1,6 @@
 # Architecture
 
-Status: proposed; no inference implementation is shipped.
+Status: strict configuration and offline conditional planning implemented; the remaining architecture is proposed. No inference implementation is shipped. See [implemented contract](CONFIG.md).
 
 ## Design constraints
 
