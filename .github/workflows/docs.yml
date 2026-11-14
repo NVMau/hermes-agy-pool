@@ -1,0 +1,19 @@
+name: Documentation
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Validate example JSON
+        run: python3 -m json.tool examples/pools.json > /dev/null
+      - name: Validate required documentation
+        run: |
+          for file in README.md LICENSE SECURITY.md CONTRIBUTING.md THIRD_PARTY_NOTICES.md docs/ARCHITECTURE.md docs/ROADMAP.md docs/RESEARCH.md docs/adr/0001-identity-boundary.md docs/assets/banner.svg; do
+            test -s "$file" || exit 1
+          done
+          git diff --check

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "limits": {
+    "max_workers": 2,
+    "queue_timeout_s": 10,
+    "request_timeout_s": 300,
+    "max_attempts": 3
+  },
+  "accounts": {
+    "primary": {
+      "backend": "agy",
+      "identity_ref": "primary",
+      "max_concurrency": 1,
+      "enabled": true
+    },
+    "secondary": {
+      "backend": "agy",
+      "identity_ref": "secondary",
+      "max_concurrency": 1,
+      "enabled": true
+    }
+  },
+  "groups": {
+    "interactive": {
+      "accounts": [
+        "primary",
+        "secondary"
+      ],
+      "selection": "sticky_round_robin"
+    },
+    "background": {
+      "accounts": [
+        "secondary"
+      ],
+      "selection": "sticky_round_robin"
+    }
+  },
+  "routes": {
+    "interactive/quality": {
+      "group": "interactive",
+      "models": [
+        "claude-sonnet-4-6",
+        "gemini-3.1-pro"
+      ],
+      "fallback_on": [
+        "unsupported_model"
+      ],
+      "required_capabilities": [
+        "tools"
+      ]
+    },
+    "background/fast": {
+      "group": "background",
+      "models": [
+        "gemini-3.8-flash"
+      ],
+      "fallback_on": [],
+      "required_capabilities": []
+    }
+  }
+}
