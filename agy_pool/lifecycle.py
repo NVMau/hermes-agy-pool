@@ -17,6 +17,17 @@ class Output:
     value: object
 
 
+@dataclass(frozen=True)
+class Metadata:
+    """Non-visible usage or finish information; not a replay boundary."""
+    kind: str
+    value: object
+
+    def __post_init__(self):
+        if self.kind not in ('usage', 'finish'):
+            raise ValueError('Unknown metadata kind')
+
+
 class BackendError(Exception):
     def __init__(self, failure: Failure):
         super().__init__('Backend attempt failed')
@@ -31,8 +42,8 @@ class Worker(Protocol):
         """Start only this identity; retain partial resources on failure."""
         ...
 
-    def read(self) -> Output:
-        """Return a visible fragment, raise StopIteration at EOF, or an error."""
+    def read(self) -> Output | Metadata:
+        """Return a typed event, raise StopIteration at EOF, or an error."""
         ...
 
     def close(self) -> bool:
@@ -110,6 +121,8 @@ class Session:
             raise
         try:
             try:
+                if isinstance(event, Metadata):
+                    return event
                 self.ticket.request.visible(self.ticket.attempt, event.fragment)
                 return event
             except StopIteration as exc:

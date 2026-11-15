@@ -86,6 +86,22 @@ class LifecycleTests(unittest.TestCase):
             self.assertIsNone(self.ticket.request.next_attempt())
             self.assertEqual(self.worker.starts, 1)
 
+    def test_metadata_does_not_commit_visible_output_before_retryable_error(self):
+        from agy_pool.lifecycle import Metadata, BackendError
+        from agy_pool.errors import Failure, Kind
+        def events():
+            yield Metadata('usage', {'tokens': 1})
+            yield Metadata('finish', 'incomplete')
+            raise BackendError(Failure(Kind.UNSUPPORTED_MODEL))
+        self.worker.events = events()
+        session = self.session().start()
+        self.assertEqual(next(session).kind, 'usage')
+        self.assertEqual(next(session).kind, 'finish')
+        with self.assertRaises(BackendError):
+            next(session)
+        self.assertEqual(self.ticket.request.status, Status.READY)
+        self.assertEqual(self.count(), 0)
+
     def test_typed_start_failure_is_finalized_only_after_cleanup(self):
         from agy_pool.lifecycle import BackendError
         from agy_pool.errors import Failure, Kind
