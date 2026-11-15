@@ -225,6 +225,51 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.count(), 0)
         self.assertEqual(self.ticket.status, 'cancelled')
 
+    def test_post_read_stopiteration_is_failure_not_eof(self):
+        from agy_pool.lifecycle import Output
+        for phase in ('fragment', 'visible'):
+            for cleanup_fails in (False, True):
+                with self.subTest(phase=phase, cleanup_fails=cleanup_fails):
+                    if phase != 'fragment' or cleanup_fails:
+                        self.setUp()
+                    failure = StopIteration(phase)
+                    class BrokenOutput(Output):
+                        def __getattribute__(self, name):
+                            if name == 'fragment':
+                                raise failure
+                            return super().__getattribute__(name)
+                    event = (BrokenOutput(Fragment.TEXT, 'fixture') if phase == 'fragment'
+                             else Output(Fragment.TEXT, 'fixture'))
+                    self.worker.events = iter((event,))
+                    if phase == 'visible':
+                        def broken_visible(*args):
+                            raise failure
+                        self.ticket.request.visible = broken_visible
+                    session = self.session().start()
+                    lease = self.ticket.lease
+                    if cleanup_fails:
+                        def broken_close():
+                            raise OSError('cleanup failed')
+                        self.worker.on_close = broken_close
+                        with self.assertRaises(OSError) as caught:
+                            list(session)
+                        wrapped = caught.exception.__context__
+                        self.assertIsInstance(wrapped, RuntimeError)
+                        self.assertIs(wrapped.__cause__, failure)
+                        self.assertEqual(self.ticket.status, 'cleanup_pending')
+                        self.assertEqual(self.ticket.request.status, Status.IN_FLIGHT)
+                        self.assertIs(self.ticket.lease, lease)
+                        self.assertEqual(self.count(), 1)
+                        self.worker.on_close = lambda: None
+                        session.close()
+                    else:
+                        with self.assertRaises(RuntimeError) as caught:
+                            list(session)
+                        self.assertIs(caught.exception.__cause__, failure)
+                    self.assertEqual(self.ticket.request.status, Status.STOPPED)
+                    self.assertEqual(self.ticket.status, 'stopped')
+                    self.assertEqual(self.count(), 0)
+
     def test_eof_cleanup_stopiteration_is_not_silent_and_can_retry(self):
         session = self.session().start()
         lease = self.ticket.lease

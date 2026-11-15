@@ -100,12 +100,20 @@ class Session:
             raise RuntimeError('Session has not started')
         try:
             event = self.worker.read()
-            self.ticket.request.visible(self.ticket.attempt, event.fragment)
-            return event
         except StopIteration:
             self._outcome = 'succeeded'
             self._close_for_iteration()
             raise
+        except BaseException as exc:
+            self._failure = exc.failure if isinstance(exc, BackendError) else Failure()
+            self._close_for_iteration()
+            raise
+        try:
+            try:
+                self.ticket.request.visible(self.ticket.attempt, event.fragment)
+                return event
+            except StopIteration as exc:
+                raise RuntimeError('Post-read processing raised StopIteration') from exc
         except BaseException as exc:
             self._failure = exc.failure if isinstance(exc, BackendError) else Failure()
             self._close_for_iteration()
