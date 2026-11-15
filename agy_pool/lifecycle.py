@@ -93,6 +93,13 @@ class Session:
             if getattr(self.worker, 'verified_account', None) != self.ticket.attempt.account:
                 raise ValueError('Backend identity is unverified or mismatched')
             self.worker.start()
+        except StopIteration as exc:
+            self._failure = Failure()
+            try:
+                raise RuntimeError('Startup raised StopIteration') from exc
+            except RuntimeError:
+                self.close()
+                raise
         except BaseException as exc:
             self._failure = exc.failure if isinstance(exc, BackendError) else Failure()
             self.close()
@@ -113,11 +120,11 @@ class Session:
             event = self.worker.read()
         except StopIteration:
             self._outcome = 'succeeded'
-            self._close_for_iteration()
+            self.close()
             raise
         except BaseException as exc:
             self._failure = exc.failure if isinstance(exc, BackendError) else Failure()
-            self._close_for_iteration()
+            self.close()
             raise
         try:
             try:
@@ -129,14 +136,8 @@ class Session:
                 raise RuntimeError('Post-read processing raised StopIteration') from exc
         except BaseException as exc:
             self._failure = exc.failure if isinstance(exc, BackendError) else Failure()
-            self._close_for_iteration()
-            raise
-
-    def _close_for_iteration(self):
-        try:
             self.close()
-        except StopIteration as exc:
-            raise RuntimeError('Cleanup raised StopIteration') from exc
+            raise
 
     def cancel(self):
         if self._outcome is None:
@@ -144,6 +145,12 @@ class Session:
         self.close()
 
     def close(self):
+        try:
+            self._close()
+        except StopIteration as exc:
+            raise RuntimeError('Cleanup raised StopIteration') from exc
+
+    def _close(self):
         if self._closed:
             return
         if self._outcome is None:

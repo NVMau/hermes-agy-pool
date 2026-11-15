@@ -82,6 +82,89 @@ class DriverTests(unittest.TestCase):
         self.scheduler.cancel(ticket)
         driver.close()
 
+    def test_prepare_stopiteration_is_not_driver_eof(self):
+        from agy_pool.driver import Driver
+        failure = StopIteration('prepare')
+        backend = ProcessBackend([])
+        def prepare(context):
+            raise failure
+        backend.prepare = prepare
+        driver = Driver(self.scheduler, self.request, backend, session='s', owner='o')
+        with self.assertRaises(RuntimeError) as caught:
+            list(driver)
+        self.assertIs(caught.exception.__cause__, failure)
+        self.assertEqual(self.request.status, Status.STOPPED)
+        self.assertEqual(self.count(), 0)
+
+    def test_start_stopiteration_is_not_driver_eof(self):
+        from agy_pool.driver import Driver
+        backend = ProcessBackend([])
+        failure = StopIteration('start')
+        def prepare(context):
+            worker = ProcessWorker(context.attempt.account, '')
+            def start():
+                raise failure
+            worker.start = start
+            backend.workers.append(worker)
+            return worker
+        backend.prepare = prepare
+        driver = Driver(self.scheduler, self.request, backend, session='s', owner='o')
+        with self.assertRaises(RuntimeError) as caught:
+            list(driver)
+        self.assertIs(caught.exception.__cause__, failure)
+        self.assertEqual(self.request.status, Status.STOPPED)
+        self.assertEqual(self.count(), 0)
+
+    def test_partial_dispatch_error_retains_ownership_for_close(self):
+        from agy_pool.driver import Driver
+        from agy_pool.scheduler import PollError
+        backend = ProcessBackend([])
+        poll = self.scheduler.poll
+        fault = OSError('after dispatch')
+        def partial_poll():
+            dispatched = poll()
+            raise PollError(dispatched) from fault
+        self.scheduler.poll = partial_poll
+        driver = Driver(self.scheduler, self.request, backend, session='s', owner='o')
+        with self.assertRaises(PollError) as caught:
+            next(driver)
+        self.assertIs(caught.exception.__cause__, fault)
+        self.assertIs(driver.active.ticket, caught.exception.dispatched[0])
+        self.assertEqual(self.count(), 1)
+        self.assertEqual(self.request.status, Status.IN_FLIGHT)
+        driver.close()
+        self.assertEqual(self.count(), 0)
+        self.assertEqual(self.request.status, Status.STOPPED)
+        self.assertEqual(backend.workers, [])
+
+    def test_start_failure_cleanup_stopiteration_is_not_driver_eof(self):
+        from agy_pool.driver import Driver
+        backend = ProcessBackend([])
+        startup = ValueError('start')
+        cleanup = StopIteration('cleanup')
+        def prepare(context):
+            worker = ProcessWorker(context.attempt.account, '')
+            def start():
+                raise startup
+            def close():
+                raise cleanup
+            worker.start, worker.close = start, close
+            backend.workers.append(worker)
+            return worker
+        backend.prepare = prepare
+        driver = Driver(self.scheduler, self.request, backend, session='s', owner='o')
+        with self.assertRaises(RuntimeError) as caught:
+            list(driver)
+        self.assertIs(caught.exception.__cause__, cleanup)
+        self.assertIs(cleanup.__context__, startup)
+        self.assertEqual(driver.ticket.status, 'cleanup_pending')
+        self.assertEqual(self.request.status, Status.IN_FLIGHT)
+        self.assertEqual(self.count(), 1)
+        backend.workers[0].close = lambda: True
+        driver.close()
+        self.assertEqual(self.count(), 0)
+        self.assertEqual(self.request.status, Status.STOPPED)
+
     def test_driver_retains_cleanup_ownership_after_start_failure(self):
         from agy_pool.driver import Driver
         backend = ProcessBackend(["print('text')"])
