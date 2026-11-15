@@ -33,11 +33,15 @@ All unchecked items are planned. No runtime capability is implied by this roadma
 See [implemented scheduler scope and evidence](SCHEDULER.md); metadata multiprocessing tests do not satisfy live worker release gates.
 
 ## M3 — Backend and stream
-- [ ] Explicit immutable account launch context
+- [x] Backend-agnostic immutable attempt/session launch context (not verified AGY identity)
 - [ ] Preserve Hermes tool approval semantics
 - [ ] Sync and nonblocking async iteration
 - [ ] Cancellation, EOF, abandonment and process cleanup
 - [ ] Pre-output failover; no replay after any visible delta
+
+Implemented bounded subset: [synchronous dispatched-ticket lifecycle](LIFECYCLE.md),
+with injected stream fixtures and direct-child cancellation/exit-before-release evidence.
+Async, process-tree supervision, live identity and Hermes integration remain unimplemented.
 
 ## M4 — Hermes integration
 - [ ] Separate provider registration and route discovery
@@ -63,6 +67,6 @@ Each PR should take one vertical behavior through RED → GREEN → regression s
 | Error scope | `tests/test_errors.py` | `agy_pool/errors.py` |
 | Explicit fallback | `tests/test_router.py` | `agy_pool/router.py` |
 | Atomic capacity | `tests/test_state.py`, `tests/test_scheduler.py` | `agy_pool/state.py`, `agy_pool/scheduler.py` |
-| Stream commit | `tests/test_stream.py` | `agy_pool/stream.py` |
+| Worker lifecycle / stream commit | `tests/test_lifecycle.py` | `agy_pool/lifecycle.py` |
 
 Do not merge a fake backend as the production backend. Tests may use fixtures, but release evidence must distinguish fixtures from real upstream execution.
