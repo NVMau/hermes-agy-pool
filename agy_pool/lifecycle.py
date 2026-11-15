@@ -104,12 +104,18 @@ class Session:
             return event
         except StopIteration:
             self._outcome = 'succeeded'
-            self.close()
+            self._close_for_iteration()
             raise
         except BaseException as exc:
             self._failure = exc.failure if isinstance(exc, BackendError) else Failure()
-            self.close()
+            self._close_for_iteration()
             raise
+
+    def _close_for_iteration(self):
+        try:
+            self.close()
+        except StopIteration as exc:
+            raise RuntimeError('Cleanup raised StopIteration') from exc
 
     def cancel(self):
         if self._outcome is None:

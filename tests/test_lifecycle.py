@@ -225,6 +225,28 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.count(), 0)
         self.assertEqual(self.ticket.status, 'cancelled')
 
+    def test_eof_cleanup_stopiteration_is_not_silent_and_can_retry(self):
+        session = self.session().start()
+        lease = self.ticket.lease
+        failure = StopIteration('close failed')
+        def broken():
+            raise failure
+        self.worker.on_close = broken
+        with self.assertRaises(RuntimeError) as caught:
+            list(session)
+        self.assertIs(caught.exception.__cause__, failure)
+        self.assertEqual(self.ticket.status, 'cleanup_pending')
+        self.assertEqual(self.ticket.request.status, Status.IN_FLIGHT)
+        self.assertIs(self.ticket.lease, lease)
+        self.assertEqual(self.count(), 1)
+        with self.assertRaises(RuntimeError):
+            next(session)
+        self.worker.on_close = lambda: None
+        session.close()
+        self.assertEqual(self.ticket.request.status, Status.SUCCEEDED)
+        self.assertEqual(self.count(), 0)
+        self.assertEqual(list(session), [])
+
     def test_eof_contention_retries_cleanup_without_turning_success_into_cancel(self):
         import sqlite3
         session = self.session().start()
@@ -240,6 +262,82 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.ticket.request.status, Status.SUCCEEDED)
         self.assertEqual(self.count(), 0)
         self.assertEqual(self.worker.closes, 1)
+
+    def test_read_error_cleanup_stopiteration_retains_error_and_retry(self):
+        from agy_pool.lifecycle import BackendError
+        from agy_pool.errors import Failure, Kind
+        read_failure = BackendError(Failure(Kind.UNSUPPORTED_MODEL))
+        cleanup_failure = StopIteration('close failed')
+        def broken_read():
+            raise read_failure
+        def broken_close():
+            raise cleanup_failure
+        self.worker.read = broken_read
+        self.worker.on_close = broken_close
+        session = self.session().start()
+        lease = self.ticket.lease
+        with self.assertRaises(RuntimeError) as caught:
+            list(session)
+        self.assertIs(caught.exception.__cause__, cleanup_failure)
+        self.assertIs(cleanup_failure.__context__, read_failure)
+        self.assertEqual(self.ticket.status, 'cleanup_pending')
+        self.assertEqual(self.ticket.request.status, Status.IN_FLIGHT)
+        self.assertIs(self.ticket.lease, lease)
+        self.assertEqual(self.count(), 1)
+        self.worker.on_close = lambda: None
+        session.close()
+        self.assertEqual(self.ticket.request.status, Status.READY)
+        self.assertEqual(self.count(), 0)
+
+    def test_iteration_cleanup_stopiteration_from_release_and_finalization(self):
+        for phase in ('release', 'finalize'):
+            with self.subTest(phase=phase):
+                if phase == 'finalize':
+                    self.setUp()
+                session = self.session().start()
+                target = self.store if phase == 'release' else self.ticket.request
+                name = 'release' if phase == 'release' else 'succeed'
+                original = getattr(target, name)
+                failure = StopIteration(phase)
+                def broken(*args, **kwargs):
+                    raise failure
+                setattr(target, name, broken)
+                with self.assertRaises(RuntimeError) as caught:
+                    next(session)
+                self.assertIs(caught.exception.__cause__, failure)
+                self.assertEqual(self.ticket.status, 'cleanup_pending')
+                self.assertEqual(self.ticket.request.status, Status.IN_FLIGHT)
+                self.assertEqual(self.count(), 1 if phase == 'release' else 0)
+                setattr(target, name, original)
+                session.close()
+                self.assertEqual(self.ticket.request.status, Status.SUCCEEDED)
+                self.assertEqual(self.worker.closes, 1)
+                self.assertEqual(self.count(), 0)
+
+    def test_read_interrupt_with_cleanup_stopiteration_preserves_exception_chain(self):
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            with self.subTest(exception=exception_type):
+                if exception_type is SystemExit:
+                    self.setUp()
+                interruption = exception_type('interrupted')
+                cleanup_failure = StopIteration('close failed')
+                def read():
+                    raise interruption
+                def close():
+                    raise cleanup_failure
+                self.worker.read = read
+                self.worker.on_close = close
+                session = self.session().start()
+                with self.assertRaises(RuntimeError) as caught:
+                    next(session)
+                self.assertIs(caught.exception.__cause__, cleanup_failure)
+                self.assertIs(cleanup_failure.__context__, interruption)
+                self.assertEqual(self.ticket.request.status, Status.IN_FLIGHT)
+                self.assertEqual(self.count(), 1)
+                self.worker.on_close = lambda: None
+                session.close()
+                self.assertEqual(self.ticket.request.status, Status.STOPPED)
+                self.assertEqual(self.count(), 0)
 
     def test_stream_error_cleanup_failure_keeps_original_error_and_no_retry(self):
         from agy_pool.lifecycle import Output, BackendError
