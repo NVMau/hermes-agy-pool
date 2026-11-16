@@ -26,6 +26,19 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class ProxyTests(unittest.TestCase):
+    def test_rejects_raw_controls_and_empty_url_delimiters(self):
+        from agy_pool.config import ConfigError
+        from agy_pool.proxy import load_proxy_config
+        config = {'schema_version': 1, 'base_url': '', 'api_key_env': 'FIXTURE_KEY', 'timeout_s': 2}
+        base = 'http://127.0.0.1:8317/v1'
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'proxy.json'
+            for url in ('\n' + base, base + '\t', base.replace('127', '1\r27'), base + '\x00', base + '\x7f', base + '?', base + '#'):
+                config['base_url'] = url
+                path.write_text(json.dumps(config), encoding='utf-8')
+                with self.subTest(url=repr(url)), self.assertRaises(ConfigError):
+                    load_proxy_config(path)
+
     def test_localhost_is_rejected_even_if_resolver_is_overridden(self):
         from unittest.mock import patch
         from agy_pool.config import ConfigError
@@ -121,6 +134,44 @@ class ProxyTests(unittest.TestCase):
                 with self.subTest(changes=changes), self.assertRaises(ConfigError) as error:
                     load_proxy_config(path)
                 self.assertNotIn('secret', str(error.exception))
+
+    def test_invalid_url_cli_is_sanitized(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'proxy.json'
+            for suffix in ('?', '#', '\tsecret-marker'):
+                config = {'schema_version': 1, 'base_url': 'http://127.0.0.1:8317/v1' + suffix, 'api_key_env': 'FIXTURE_KEY', 'timeout_s': 2}
+                path.write_text(json.dumps(config), encoding='utf-8')
+                result = subprocess.run([sys.executable, '-m', 'agy_pool', 'proxy-probe', str(path)], capture_output=True, text=True, env=dict(os.environ, FIXTURE_KEY='fixture-secret'), timeout=10)
+                with self.subTest(suffix=repr(suffix)):
+                    self.assertEqual(result.returncode, 2)
+                    self.assertNotIn('Traceback', result.stderr)
+                    self.assertNotIn('secret-marker', result.stdout + result.stderr)
+                    self.assertNotIn('fixture-secret', result.stdout + result.stderr)
+
+    def test_malformed_status_cli_does_not_leak_server_content(self):
+        import socketserver
+
+        class MalformedHandler(socketserver.BaseRequestHandler):
+            def handle(self):
+                self.request.recv(4096)
+                self.request.sendall(b'secret-marker-not-http\r\n\r\n')
+
+        server = socketserver.TCPServer(('127.0.0.1', 0), MalformedHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / 'proxy.json'
+                path.write_text(json.dumps({'schema_version': 1, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'api_key_env': 'FIXTURE_KEY', 'timeout_s': 2}), encoding='utf-8')
+                result = subprocess.run([sys.executable, '-m', 'agy_pool', 'proxy-probe', str(path)], capture_output=True, text=True, env=dict(os.environ, FIXTURE_KEY='fixture-secret'), timeout=10)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertNotIn('secret-marker-not-http', result.stdout + result.stderr)
+                self.assertNotIn('fixture-secret', result.stdout + result.stderr)
+                self.assertNotIn('Traceback', result.stderr)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
     def test_http_error_does_not_echo_response_or_key(self):
         server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)

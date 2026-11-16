@@ -1,4 +1,5 @@
 """Local-only OpenAI-compatible model catalog connectivity probe."""
+import http.client
 import ipaddress
 import json
 import math
@@ -27,7 +28,7 @@ def load_proxy_config(path):
     if type(data['schema_version']) is not int or data['schema_version'] != 1:
         raise ConfigError('Invalid proxy schema version')
     url = data['base_url']
-    if not isinstance(url, str):
+    if not isinstance(url, str) or any(ord(c) <= 32 or ord(c) == 127 for c in url) or '?' in url or '#' in url:
         raise ConfigError('Expected loopback HTTP base URL with port and /v1 path')
     try:
         parts = urlsplit(url)
@@ -77,6 +78,6 @@ def probe(config):
         raise ConfigError(f'Proxy returned HTTP {exc.code}') from None
     except (URLError, OSError, TimeoutError):
         raise ConfigError('Proxy connection failed or timed out') from None
-    except (ValueError, KeyError, TypeError, UnicodeError, RecursionError):
+    except (ValueError, KeyError, TypeError, UnicodeError, RecursionError, http.client.HTTPException):
         raise ConfigError('Invalid proxy model catalog response') from None
     return {'mode': 'proxy-connectivity', 'models': ids, 'account_selection': 'proxy-managed'}
