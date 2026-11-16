@@ -26,13 +26,88 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class ProxyTests(unittest.TestCase):
+    def test_localhost_is_rejected_even_if_resolver_is_overridden(self):
+        from unittest.mock import patch
+        from agy_pool.config import ConfigError
+        from agy_pool.proxy import load_proxy_config
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'proxy.json'
+            path.write_text(json.dumps({'schema_version': 1, 'base_url': 'http://localhost:8317/v1', 'api_key_env': 'FIXTURE_KEY', 'timeout_s': 2}), encoding='utf-8')
+            with patch('socket.getaddrinfo', side_effect=AssertionError('resolver must not be used')):
+                with self.assertRaises(ConfigError):
+                    load_proxy_config(path)
+
+    def test_numeric_loopback_validation_and_timeout_edges(self):
+        from agy_pool.config import ConfigError
+        from agy_pool.proxy import load_proxy_config
+        config = {'schema_version': 1, 'base_url': '', 'api_key_env': 'FIXTURE_KEY', 'timeout_s': 2}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'proxy.json'
+            for host, allowed in [('127.0.0.1', True), ('127.1.2.3', True), ('[::1]', True), ('[::ffff:127.0.0.1]', True), ('[::ffff:192.0.2.1]', False), ('127.1', False), ('localhost', False), ('[::2]', False)]:
+                config['base_url'] = f'http://{host}:8317/v1'
+                path.write_text(json.dumps(config), encoding='utf-8')
+                with self.subTest(host=host):
+                    if allowed:
+                        self.assertEqual(load_proxy_config(path)['base_url'], config['base_url'])
+                    else:
+                        with self.assertRaises(ConfigError):
+                            load_proxy_config(path)
+            config['base_url'] = 'http://127.0.0.1:8317/v1'
+            for timeout in (True, False, 10**400, -(10**400), 1e309, -1e309):
+                config['timeout_s'] = timeout
+                path.write_text(json.dumps(config), encoding='utf-8')
+                with self.subTest(timeout=str(timeout)), self.assertRaises(ConfigError):
+                    load_proxy_config(path)
+
+    def test_probe_disables_environment_proxy_and_redirects(self):
+        class RedirectHandler(BaseHTTPRequestHandler):
+            requests = []
+            def do_GET(self):
+                self.requests.append((self.path, self.headers.get('Authorization')))
+                self.send_response(302)
+                self.send_header('Location', f'http://127.0.0.1:{self.server.server_port}/stolen')
+                self.end_headers()
+            def log_message(self, format, *args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), RedirectHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / 'proxy.json'
+                path.write_text(json.dumps({'schema_version': 1, 'base_url': f'http://127.0.0.1:{server.server_port}/v1', 'api_key_env': 'FIXTURE_KEY', 'timeout_s': 2}), encoding='utf-8')
+                env = dict(os.environ, FIXTURE_KEY='fixture-secret', http_proxy='http://127.0.0.1:1', HTTP_PROXY='http://127.0.0.1:1', no_proxy='', NO_PROXY='')
+                result = subprocess.run([sys.executable, '-m', 'agy_pool', 'proxy-probe', str(path)], capture_output=True, text=True, env=env, timeout=10)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('HTTP 302', result.stderr)
+                self.assertNotIn('fixture-secret', result.stdout + result.stderr)
+                self.assertEqual(RedirectHandler.requests, [('/v1/models', 'Bearer fixture-secret')])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_huge_timeout_cli_is_sanitized(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'proxy.json'
+            path.write_text(json.dumps({'schema_version': 1, 'base_url': 'http://127.0.0.1:8317/v1', 'api_key_env': 'FIXTURE_KEY', 'timeout_s': 10**400}), encoding='utf-8')
+            for command in ('proxy-probe', 'proxy-hermes'):
+                args = [sys.executable, '-m', 'agy_pool', command, str(path)]
+                if command == 'proxy-hermes':
+                    args.append('fixture-model')
+                result = subprocess.run(args, capture_output=True, text=True, timeout=10)
+                with self.subTest(command=command):
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn('Timeout must be', result.stderr)
+                    self.assertNotIn('Traceback', result.stderr)
+
     def test_hermes_configuration_output_contains_only_env_reference(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'proxy.json'
             path.write_text(json.dumps({'schema_version': 1, 'base_url': 'http://127.0.0.1:8317/v1', 'api_key_env': 'FIXTURE_KEY', 'timeout_s': 2}), encoding='utf-8')
             result = subprocess.run([sys.executable, '-m', 'agy_pool', 'proxy-hermes', str(path), 'fixture-model'], capture_output=True, text=True, env=dict(os.environ, FIXTURE_KEY='fixture-secret'), timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(json.loads(result.stdout), {'model': {'default': 'fixture-model', 'provider': 'custom', 'base_url': 'http://127.0.0.1:8317/v1', 'key_env': 'FIXTURE_KEY'}})
+            self.assertEqual(json.loads(result.stdout), {'model': {'default': 'fixture-model', 'provider': 'custom:agy-local'}, 'providers': {'agy-local': {'api': 'http://127.0.0.1:8317/v1', 'key_env': 'FIXTURE_KEY'}}})
             self.assertNotIn('fixture-secret', result.stdout + result.stderr)
 
     def test_rejects_remote_and_invalid_config_without_leaking(self):

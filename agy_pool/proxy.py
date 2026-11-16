@@ -33,7 +33,9 @@ def load_proxy_config(path):
         parts = urlsplit(url)
         host = parts.hostname
         port = parts.port
-        local = bool(host) and (host == 'localhost' or ipaddress.ip_address(host).is_loopback)
+        address = ipaddress.ip_address(host or '')
+        # IPv4-mapped IPv6 must be checked as IPv4, not as ordinary IPv6.
+        local = (address.ipv4_mapped or address).is_loopback if isinstance(address, ipaddress.IPv6Address) else address.is_loopback
     except ValueError:
         raise ConfigError('Expected loopback HTTP base URL with port and /v1 path') from None
     if not local or parts.scheme != 'http' or parts.username is not None or parts.password is not None or parts.path != '/v1' or parts.query or parts.fragment or not port:
@@ -42,7 +44,7 @@ def load_proxy_config(path):
     if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name, flags=re.ASCII):
         raise ConfigError('Invalid API key environment variable name')
     timeout = data['timeout_s']
-    if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0.1 <= timeout <= 30:
+    if type(timeout) not in (int, float) or not 0.1 <= timeout <= 30 or not math.isfinite(timeout):
         raise ConfigError('Timeout must be between 0.1 and 30 seconds')
     return data
 
@@ -50,7 +52,8 @@ def load_proxy_config(path):
 def hermes_fragment(config, model):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}', model, re.ASCII):
         raise ConfigError('Invalid model identifier')
-    return {'model': {'default': model, 'provider': 'custom', 'base_url': config['base_url'], 'key_env': config['api_key_env']}}
+    return {'model': {'default': model, 'provider': 'custom:agy-local'},
+            'providers': {'agy-local': {'api': config['base_url'], 'key_env': config['api_key_env']}}}
 
 
 def probe(config):

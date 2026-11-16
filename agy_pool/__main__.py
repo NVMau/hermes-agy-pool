@@ -8,7 +8,7 @@ from .router import PlanError, plan_route
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description='Offline pool validation and routing simulation only')
+    parser = argparse.ArgumentParser(description='Offline pool validation and routing simulation; proxy-probe makes a local HTTP network request')
     commands = parser.add_subparsers(dest='command', required=True)
     validate = commands.add_parser('validate', help='Validate strict JSON; no identity or live checks')
     validate.add_argument('config')
