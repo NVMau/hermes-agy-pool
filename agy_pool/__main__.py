@@ -17,11 +17,21 @@ def main() -> int:
     plan.add_argument('route')
     plan.add_argument('--dry-run', action='store_true', required=True,
                       help='Required acknowledgement: simulation only')
+    proxy = commands.add_parser('proxy-probe', help='Probe a configured local OpenAI-compatible proxy model catalog')
+    proxy.add_argument('config')
+    hermes = commands.add_parser('proxy-hermes', help='Print a Hermes custom-provider configuration fragment; do not apply it')
+    hermes.add_argument('config')
+    hermes.add_argument('model')
     args = parser.parse_args()
     try:
-        config = load_config(args.config)
-        output = ({'valid': True, 'mode': 'offline-validation'} if args.command == 'validate'
-                  else asdict(plan_route(config, args.route)))
+        if args.command in ('proxy-probe', 'proxy-hermes'):
+            from .proxy import hermes_fragment, load_proxy_config, probe
+            proxy_config = load_proxy_config(args.config)
+            output = probe(proxy_config) if args.command == 'proxy-probe' else hermes_fragment(proxy_config, args.model)
+        else:
+            config = load_config(args.config)
+            output = ({'valid': True, 'mode': 'offline-validation'} if args.command == 'validate'
+                      else asdict(plan_route(config, args.route)))
     except (ConfigError, PlanError) as exc:
         print(f'error: {exc}', file=sys.stderr)
         return 2

@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "base_url": "http://127.0.0.1:8317/v1",
+  "api_key_env": "CLIPROXY_API_KEY",
+  "timeout_s": 5
+}
