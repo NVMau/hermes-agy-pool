@@ -17,6 +17,17 @@ class Output:
     value: object
 
 
+@dataclass(frozen=True)
+class Metadata:
+    """Non-visible usage or finish information; not a replay boundary."""
+    kind: str
+    value: object
+
+    def __post_init__(self):
+        if self.kind not in ('usage', 'finish'):
+            raise ValueError('Unknown metadata kind')
+
+
 class BackendError(Exception):
     def __init__(self, failure: Failure):
         super().__init__('Backend attempt failed')
@@ -31,8 +42,8 @@ class Worker(Protocol):
         """Start only this identity; retain partial resources on failure."""
         ...
 
-    def read(self) -> Output:
-        """Return a visible fragment, raise StopIteration at EOF, or an error."""
+    def read(self) -> Output | Metadata:
+        """Return a typed event, raise StopIteration at EOF, or an error."""
         ...
 
     def close(self) -> bool:
@@ -82,6 +93,13 @@ class Session:
             if getattr(self.worker, 'verified_account', None) != self.ticket.attempt.account:
                 raise ValueError('Backend identity is unverified or mismatched')
             self.worker.start()
+        except StopIteration as exc:
+            self._failure = Failure()
+            try:
+                raise RuntimeError('Startup raised StopIteration') from exc
+            except RuntimeError:
+                self.close()
+                raise
         except BaseException as exc:
             self._failure = exc.failure if isinstance(exc, BackendError) else Failure()
             self.close()
@@ -102,28 +120,24 @@ class Session:
             event = self.worker.read()
         except StopIteration:
             self._outcome = 'succeeded'
-            self._close_for_iteration()
+            self.close()
             raise
         except BaseException as exc:
             self._failure = exc.failure if isinstance(exc, BackendError) else Failure()
-            self._close_for_iteration()
+            self.close()
             raise
         try:
             try:
+                if isinstance(event, Metadata):
+                    return event
                 self.ticket.request.visible(self.ticket.attempt, event.fragment)
                 return event
             except StopIteration as exc:
                 raise RuntimeError('Post-read processing raised StopIteration') from exc
         except BaseException as exc:
             self._failure = exc.failure if isinstance(exc, BackendError) else Failure()
-            self._close_for_iteration()
-            raise
-
-    def _close_for_iteration(self):
-        try:
             self.close()
-        except StopIteration as exc:
-            raise RuntimeError('Cleanup raised StopIteration') from exc
+            raise
 
     def cancel(self):
         if self._outcome is None:
@@ -131,6 +145,12 @@ class Session:
         self.close()
 
     def close(self):
+        try:
+            self._close()
+        except StopIteration as exc:
+            raise RuntimeError('Cleanup raised StopIteration') from exc
+
+    def _close(self):
         if self._closed:
             return
         if self._outcome is None:

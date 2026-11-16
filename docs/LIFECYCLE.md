@@ -18,8 +18,10 @@ scheduler, launch AGY, implement automatic failover, or provide a production bac
   worker will use, not an echo of the requested account. Missing/None/mismatched
   evidence fails closed before `start`. The protocol cannot authenticate arbitrary
   injected Python code: real identity discovery/isolation remains an M0 blocker.
-- `Worker.read()` yields `Output(Fragment, value)`, raises `StopIteration` for EOF,
-  or raises an error. Every yielded fragment is marked visible **before** delivery.
+- `Worker.read()` yields `Output(Fragment, value)` or `Metadata('usage'|'finish', value)`,
+  raises `StopIteration` for EOF, or raises an error. Metadata is non-visible; hosts
+  must not expose it as user-visible output if they intend to allow a retry. Every
+  output fragment is marked visible **before** delivery.
   All fragment types, including reasoning and tool fragments, prohibit later replay.
   `BackendError(Failure(...))` supplies typed routing policy during preparation,
   startup, or reading; other errors are unknown and nonretryable. No retry is
@@ -58,6 +60,18 @@ completes. Do not mutate the Ticket/RequestRouter or externally release/reclaim 
 lease while Session owns it. No GC/destructor cleanup, background cleanup thread,
 auto-expiry/reclamation, async iterator, concurrent cancellation, or blocking-read
 interruption is implemented. A host process crash needs future supervised recovery.
+
+## Optional driver
+
+`agy_pool.driver.Driver` bridges one request to an exclusively owned Scheduler and
+Session. It discards metadata, retries typed pre-visible failures only when the
+RequestRouter permits, and forwards visible output. It does not wait for capacity:
+`CapacityBlocked` means call `next` again after capacity changes. It is synchronous,
+single-owner and requires explicit `close()` even after exceptions or early exit;
+if close fails retain the same driver and retry. Do not share or mutate its scheduler
+or request. Blocking reads have no timeout or concurrent cancellation. Poll errors
+propagate, and any dispatched session remains owned by the driver for cleanup.
+Tests use a synthetic Python subprocess, not an AGY adapter or identity proof.
 
 ## Evidence and limits
 

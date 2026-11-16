@@ -86,6 +86,22 @@ class LifecycleTests(unittest.TestCase):
             self.assertIsNone(self.ticket.request.next_attempt())
             self.assertEqual(self.worker.starts, 1)
 
+    def test_metadata_does_not_commit_visible_output_before_retryable_error(self):
+        from agy_pool.lifecycle import Metadata, BackendError
+        from agy_pool.errors import Failure, Kind
+        def events():
+            yield Metadata('usage', {'tokens': 1})
+            yield Metadata('finish', 'incomplete')
+            raise BackendError(Failure(Kind.UNSUPPORTED_MODEL))
+        self.worker.events = events()
+        session = self.session().start()
+        self.assertEqual(next(session).kind, 'usage')
+        self.assertEqual(next(session).kind, 'finish')
+        with self.assertRaises(BackendError):
+            next(session)
+        self.assertEqual(self.ticket.request.status, Status.READY)
+        self.assertEqual(self.count(), 0)
+
     def test_typed_start_failure_is_finalized_only_after_cleanup(self):
         from agy_pool.lifecycle import BackendError
         from agy_pool.errors import Failure, Kind
@@ -462,6 +478,77 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.count(), 0)
         self.assertEqual(self.ticket.request.status, Status.READY)
         self.assertEqual(self.worker.starts, 1)
+
+    def test_direct_cleanup_stopiteration_is_wrapped_and_retryable(self):
+        for phase in ('close', 'release', 'finalize'):
+            with self.subTest(phase=phase):
+                if phase != 'close':
+                    self.setUp()
+                session = self.session().start()
+                target = {'close': self.worker, 'release': self.store,
+                          'finalize': self.ticket.request}[phase]
+                name = {'close': 'close', 'release': 'release', 'finalize': 'fail'}[phase]
+                original = getattr(target, name)
+                failure = StopIteration(phase)
+                def broken(*args, **kwargs):
+                    raise failure
+                setattr(target, name, broken)
+                with self.assertRaises(RuntimeError) as caught:
+                    session.close()
+                self.assertIs(caught.exception.__cause__, failure)
+                self.assertEqual(self.ticket.status, 'cleanup_pending')
+                self.assertEqual(self.ticket.request.status, Status.IN_FLIGHT)
+                self.assertEqual(self.count(), 0 if phase == 'finalize' else 1)
+                setattr(target, name, original)
+                session.close()
+                self.assertEqual(self.ticket.request.status, Status.STOPPED)
+                self.assertEqual(self.count(), 0)
+
+    def test_start_stopiteration_with_cleanup_stopiteration_preserves_both(self):
+        startup = StopIteration('start')
+        cleanup = StopIteration('cleanup')
+        def start():
+            raise startup
+        def close():
+            raise cleanup
+        self.worker.start = start
+        self.worker.on_close = close
+        session = self.session()
+        with self.assertRaises(RuntimeError) as caught:
+            session.start()
+        self.assertIs(caught.exception.__cause__, cleanup)
+        self.assertIsInstance(cleanup.__context__, RuntimeError)
+        self.assertIs(cleanup.__context__.__cause__, startup)
+        self.assertEqual(self.ticket.status, 'cleanup_pending')
+        self.assertEqual(self.count(), 1)
+        self.worker.on_close = lambda: None
+        session.close()
+        self.assertEqual(self.count(), 0)
+        self.assertEqual(self.ticket.request.status, Status.STOPPED)
+
+    def test_start_interrupt_cleanup_stopiteration_preserves_chain(self):
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            with self.subTest(exception=exception_type):
+                if exception_type is SystemExit:
+                    self.setUp()
+                interruption = exception_type('interrupted')
+                failure = StopIteration('cleanup')
+                def start():
+                    raise interruption
+                def close():
+                    raise failure
+                self.worker.start = start
+                self.worker.on_close = close
+                session = self.session()
+                with self.assertRaises(RuntimeError) as caught:
+                    session.start()
+                self.assertIs(caught.exception.__cause__, failure)
+                self.assertIs(failure.__context__, interruption)
+                self.assertEqual(self.count(), 1)
+                self.worker.on_close = lambda: None
+                session.close()
+                self.assertEqual(self.ticket.request.status, Status.STOPPED)
+                self.assertEqual(self.count(), 0)
 
     def test_start_failure_with_close_failure_can_be_retried(self):
         def broken_start():

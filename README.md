@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-5eead4)](LICENSE)
 [![Documentation](https://github.com/NVMau/hermes-agy-pool/actions/workflows/docs.yml/badge.svg)](https://github.com/NVMau/hermes-agy-pool/actions/workflows/docs.yml)
 
-A lightweight, backend-independent routing core for Hermes Agent — inspired by CLIProxyAPI. An official AGY transport adapter remains planned.
+A lightweight, backend-independent routing core for Hermes Agent with an optional local CLIProxyAPI connectivity probe and Hermes custom-provider configuration output. An official AGY transport adapter remains planned.
 
 [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Research](docs/RESEARCH.md) · [Contributing](CONTRIBUTING.md)
 
@@ -18,7 +18,7 @@ A lightweight, backend-independent routing core for Hermes Agent — inspired by
 
 ---
 
-> **Offline coordination core — not an installable Hermes provider.** Strict JSON validation, conditional plans, in-memory runtime policy, atomic SQLite reservations and a bounded metadata scheduler are implemented. Identity verification, live worker execution, live account rotation and inference are not implemented. See [scheduler contract and evidence](docs/SCHEDULER.md) and the [bounded synchronous lifecycle](docs/LIFECYCLE.md) (injected stream fixtures and direct-child cancellation evidence only).
+> **Offline coordination core plus opt-in local proxy connector — not an installable Hermes provider.** The proxy probe makes a real local HTTP request; the pool itself remains offline. Strict JSON validation, conditional plans, in-memory runtime policy, atomic SQLite reservations and a bounded metadata scheduler are implemented. Identity verification, live worker execution, live account rotation and inference are not implemented. See [scheduler contract and evidence](docs/SCHEDULER.md) and the [bounded synchronous lifecycle](docs/LIFECYCLE.md) (injected stream fixtures and direct-child cancellation evidence only).
 
 ## Why this exists
 
@@ -101,6 +101,10 @@ A deterministic, in-memory state machine executes the routing policy without liv
 - A caller-driven, bounded in-memory queue with deadlines, cancellation and context-managed cleanup. Real multiprocessing tests verify metadata contention, not a live AGY process pool.
 
 [Full API, lifecycle limits and TDD evidence](docs/SCHEDULER.md). No live transport/auth implementation is included.
+
+## Local proxy connector
+
+An opt-in local OpenAI-compatible `/v1/models` probe and Hermes custom-provider configuration fragment are available; the proxy independently chooses accounts and the offline pool does not control requests. [Configuration, Windows PowerShell usage and limitations →](docs/PROXY.md).
 
 ## Development status
 
